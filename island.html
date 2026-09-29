@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firefly Island</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui;background:#9fd3ea}
+#hud{position:fixed;top:12px;left:16px;color:#fff;text-shadow:0 1px 3px #000;font-size:1.1rem}
+#msg{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  color:#fff;text-shadow:0 2px 6px #000;text-align:center;background:rgba(0,0,0,.25);cursor:pointer}
+#msg h1{margin:0 0 8px;font-weight:300;letter-spacing:.1em}
+</style></head><body>
+<div id="hud">Fireflies: <b id="got">0</b>/10 · <span id="time">0.0</span>s</div>
+<div id="msg"><h1>FIREFLY ISLAND</h1><p>Catch all 10 fireflies hidden around the island.<br>
+WASD / arrows to walk · Shift to run · drag the mouse to look<br><br>Click to start</p></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const R = 55, TOTAL = 10;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fd3ea);
+scene.fog = new THREE.Fog(0x9fd3ea, 20, 90);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 200);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.prepend(renderer.domElement);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x3a5f2a, 0.8));
+const sun = new THREE.DirectionalLight(0xfff2d0, 0.8);
+sun.position.set(30, 50, 20); scene.add(sun);
+
+// Rolling hills that sink into the sea at the island's edge
+function height(x, z) {
+  const d = Math.hypot(x, z);
+  return Math.sin(x * 0.1) * Math.cos(z * 0.12) * 2 + Math.sin(x * 0.05 + z * 0.07) * 1.5
+       + 1.5 - Math.max(0, d - R + 12) * 0.35;
+}
+
+const ground = new THREE.PlaneGeometry(160, 160, 120, 120);
+ground.rotateX(-Math.PI / 2);
+const pos = ground.attributes.position, colors = [];
+const sand = new THREE.Color(0xe6d59a), grass = new THREE.Color(0x5f9e3c), dark = new THREE.Color(0x3f7a2a);
+for (let i = 0; i < pos.count; i++) {
+  const y = height(pos.getX(i), pos.getZ(i));
+  pos.setY(i, y);
+  const c = y < 0.6 ? sand : grass.clone().lerp(dark, Math.min(1, Math.max(0, (y - 1) / 3)));
+  colors.push(c.r, c.g, c.b);
+}
+ground.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+ground.computeVertexNormals();
+scene.add(new THREE.Mesh(ground, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+
+const water = new THREE.Mesh(new THREE.PlaneGeometry(400, 400),
+  new THREE.MeshLambertMaterial({ color: 0x3f8fc4, transparent: true, opacity: 0.85 }));
+water.rotation.x = -Math.PI / 2; scene.add(water);
+
+// Random spot on dry land, away from the spawn point
+function landSpot(minH = 0.8) {
+  for (;;) {
+    const a = Math.random() * Math.PI * 2, r = 6 + Math.random() * (R - 14);
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    if (height(x, z) > minH) return [x, z];
+  }
+}
+
+// Trees (trunk + two leaf cones), rocks and flowers share geometry for speed
+const trunkG = new THREE.CylinderGeometry(0.2, 0.3, 2, 6), leafG = new THREE.ConeGeometry(1.4, 2.6, 7);
+const trunkM = new THREE.MeshLambertMaterial({ color: 0x6b4a2b });
+const leafM = [0x2e6b2f, 0x3b7d34, 0x285c2a].map(c => new THREE.MeshLambertMaterial({ color: c, flatShading: true }));
+const obstacles = [];
+for (let i = 0; i < 140; i++) {
+  const [x, z] = landSpot(), y = height(x, z), s = 0.7 + Math.random() * 0.8;
+  const tree = new THREE.Group();
+  const trunk = new THREE.Mesh(trunkG, trunkM); trunk.position.y = 1;
+  const m = leafM[i % 3];
+  const l1 = new THREE.Mesh(leafG, m); l1.position.y = 2.8;
+  const l2 = new THREE.Mesh(leafG, m); l2.position.y = 4; l2.scale.setScalar(0.75);
+  tree.add(trunk, l1, l2); tree.position.set(x, y - 0.1, z); tree.scale.setScalar(s);
+  tree.rotation.y = Math.random() * 6; scene.add(tree);
+  obstacles.push({ x, z, r: 0.6 * s });
+}
+const rockG = new THREE.DodecahedronGeometry(1, 0), rockM = new THREE.MeshLambertMaterial({ color: 0x8a8a84, flatShading: true });
+for (let i = 0; i < 40; i++) {
+  const [x, z] = landSpot(0.2), s = 0.4 + Math.random() * 1.1;
+  const rock = new THREE.Mesh(rockG, rockM);
+  rock.position.set(x, height(x, z), z); rock.scale.set(s, s * 0.7, s); rock.rotation.set(Math.random(), Math.random(), 0);
+  scene.add(rock); obstacles.push({ x, z, r: s * 0.9 });
+}
+const flowerG = new THREE.SphereGeometry(0.12, 5, 4);
+const flowerM = [0xff6b8a, 0xffe066, 0xffffff, 0xb38cff].map(c => new THREE.MeshBasicMaterial({ color: c }));
+for (let i = 0; i < 300; i++) {
+  const [x, z] = landSpot(), f = new THREE.Mesh(flowerG, flowerM[i % 4]);
+  f.position.set(x, height(x, z) + 0.12, z); scene.add(f);
+}
+
+// Fireflies: glowing orbs with a soft halo that bob and drift
+const flyG = new THREE.SphereGeometry(0.18, 8, 6), haloG = new THREE.SphereGeometry(0.45, 8, 6);
+const flyM = new THREE.MeshBasicMaterial({ color: 0xfff27a });
+const haloM = new THREE.MeshBasicMaterial({ color: 0xfff27a, transparent: true, opacity: 0.3 });
+let flies = [];
+function spawnFlies() {
+  flies.forEach(f => scene.remove(f.mesh));
+  flies = Array.from({ length: TOTAL }, () => {
+    const [x, z] = landSpot(), mesh = new THREE.Mesh(flyG, flyM);
+    mesh.add(new THREE.Mesh(haloG, haloM)); scene.add(mesh);
+    return { mesh, x, z, phase: Math.random() * 6 };
+  });
+}
+
+// Player state and controls
+const player = { x: 0, z: 0, yaw: 0, pitch: 0 };
+const keys = {};
+addEventListener('keydown', e => keys[e.code] = true);
+addEventListener('keyup', e => keys[e.code] = false);
+let dragging = false, lastX = 0, lastY = 0;
+addEventListener('pointerdown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+addEventListener('pointerup', () => dragging = false);
+addEventListener('pointermove', e => {
+  if (!dragging) return;
+  player.yaw -= (e.clientX - lastX) * 0.005;
+  player.pitch = Math.max(-1.2, Math.min(1.2, player.pitch - (e.clientY - lastY) * 0.005));
+  lastX = e.clientX; lastY = e.clientY;
+});
+
+let playing = false, got = 0, startTime = 0;
+const msg = document.getElementById('msg'), gotEl = document.getElementById('got'), timeEl = document.getElementById('time');
+msg.onclick = () => {
+  Object.assign(player, { x: 0, z: 0, yaw: 0, pitch: 0 });
+  got = 0; gotEl.textContent = 0; spawnFlies();
+  startTime = performance.now(); playing = true; msg.style.display = 'none';
+};
+
+function blocked(x, z) {
+  if (Math.hypot(x, z) > R - 6 || height(x, z) < -0.3) return true;  // stay on the island
+  return obstacles.some(o => Math.hypot(x - o.x, z - o.z) < o.r + 0.4);
+}
+
+const clock = new THREE.Clock();
+function loop() {
+  const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+  if (playing) {
+    const fwd = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
+    const side = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+    const speed = (keys.ShiftLeft || keys.ShiftRight ? 12 : 6) * dt;
+    const sin = Math.sin(player.yaw), cos = Math.cos(player.yaw);
+    const nx = player.x + (-sin * fwd + cos * side) * speed;
+    const nz = player.z + (-cos * fwd - sin * side) * speed;
+    if (!blocked(nx, player.z)) player.x = nx;   // slide along obstacles
+    if (!blocked(player.x, nz)) player.z = nz;
+
+    for (const f of flies) {
+      if (!f.mesh.visible) continue;
+      if (Math.hypot(player.x - f.x, player.z - f.z) < 1.4) {
+        f.mesh.visible = false; gotEl.textContent = ++got;
+        if (got === TOTAL) {
+          playing = false; msg.style.display = 'flex';
+          msg.innerHTML = `<h1>ALL CAUGHT</h1><p>You found every firefly in ${timeEl.textContent}s.<br><br>Click to play again</p>`;
+        }
+      }
+    }
+    timeEl.textContent = ((performance.now() - startTime) / 1000).toFixed(1);
+  }
+  for (const f of flies) {
+    f.mesh.position.set(f.x + Math.sin(t + f.phase) * 0.4, height(f.x, f.z) + 1.3 + Math.sin(t * 2 + f.phase) * 0.3, f.z);
+    f.mesh.children[0].scale.setScalar(1 + Math.sin(t * 4 + f.phase) * 0.25);
+  }
+  water.position.y = Math.sin(t * 0.8) * 0.05;
+  camera.position.set(player.x, height(player.x, player.z) + 1.7, player.z);
+  camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+spawnFlies(); loop();
+</script></body></html>
