@@ -11,14 +11,15 @@ html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui;background:
 </style></head><body>
 <div id="hud">Fireflies: <b id="got">0</b>/10 · <span id="time">0.0</span>s</div>
 <div id="msg"><h1>FIREFLY ISLAND</h1><p>Catch all 10 fireflies hidden around the island.<br>
-WASD / arrows to walk · Shift to run · drag the mouse to look<br><br>Click to start</p></div>
+WASD / arrows to walk · Shift to run · drag the mouse to look · N to detonate<br><br>Click to start</p></div>
+<div id="flash" style="position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 const R = 55, TOTAL = 10;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9fd3ea);
 scene.fog = new THREE.Fog(0x9fd3ea, 20, 90);
-const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 200);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 500);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.prepend(renderer.domElement);
@@ -109,10 +110,47 @@ function spawnFlies() {
   });
 }
 
+// Distant nuclear blast out at sea: flash, fireball, rising mushroom cloud, shockwave.
+// fog:false keeps it visible beyond the island's fog.
+const SKY = new THREE.Color(0x9fd3ea), GLOW = new THREE.Color(0xffb070);
+const blastMat = c => new THREE.MeshBasicMaterial({ color: c, fog: false, transparent: true });
+const blast = new THREE.Group(); blast.position.set(0, 0, -160); blast.visible = false; scene.add(blast);
+const fireball = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), blastMat(0xfff4c0));
+const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 1, 1, 16, 1, true), blastMat(0x9a7a62));
+const cap = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), blastMat(0xff8a3a));
+const skirt = new THREE.Mesh(new THREE.TorusGeometry(1, 0.25, 8, 32), blastMat(0xc9a88a));
+const wave = new THREE.Mesh(new THREE.RingGeometry(0.97, 1, 96), blastMat(0xffffff));
+wave.rotation.x = skirt.rotation.x = -Math.PI / 2; wave.position.y = 0.3;
+blast.add(fireball, stem, cap, skirt, wave);
+const flash = document.getElementById('flash');
+const capColor = [new THREE.Color(0xff8a3a), new THREE.Color(0x6e5c52)];
+let blastT = -1, shake = 0, waveHit = false;
+
+function detonate() { blastT = 0; waveHit = false; blast.visible = true; }
+
+function updateBlast(dt) {
+  if (blastT < 0) return;
+  const t = (blastT += dt), e = 1 - Math.pow(1 - Math.min(1, t / 8), 3);  // ease-out growth
+  const h = 8 + e * 60, fade = Math.max(0, 1 - Math.max(0, t - 20) / 12);
+  flash.style.opacity = Math.max(0, 1 - t * 1.2);
+  scene.background.copy(SKY).lerp(GLOW, Math.max(0, 0.7 - t * 0.08));
+  fireball.scale.setScalar(6 + e * 8); fireball.position.y = h;
+  fireball.material.opacity = Math.max(0, 1 - t / 6);
+  cap.scale.set(10 + e * 16, 7 + e * 9, 10 + e * 16); cap.position.y = h;
+  cap.material.color.copy(capColor[0]).lerp(capColor[1], Math.min(1, t / 10));
+  skirt.scale.setScalar(12 + e * 18); skirt.position.y = h - 6 - e * 4;
+  stem.scale.set(3 + e * 3, h, 3 + e * 3); stem.position.y = h / 2;
+  [cap, stem, skirt].forEach(m => m.material.opacity = fade);
+  const radius = t * 45;                       // shockwave spreading over the sea
+  wave.scale.setScalar(radius); wave.material.opacity = Math.max(0, 1 - radius / 260);
+  if (!waveHit && radius > Math.hypot(player.x, player.z + 160)) { waveHit = true; shake = 1.2; }
+  if (fade === 0) { blastT = -1; blast.visible = false; scene.background.copy(SKY); }
+}
+
 // Player state and controls
 const player = { x: 0, z: 0, yaw: 0, pitch: 0 };
 const keys = {};
-addEventListener('keydown', e => keys[e.code] = true);
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyN') detonate(); });
 addEventListener('keyup', e => keys[e.code] = false);
 let dragging = false, lastX = 0, lastY = 0;
 addEventListener('pointerdown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
@@ -130,6 +168,7 @@ msg.onclick = () => {
   Object.assign(player, { x: 0, z: 0, yaw: 0, pitch: 0 });
   got = 0; gotEl.textContent = 0; spawnFlies();
   startTime = performance.now(); playing = true; msg.style.display = 'none';
+  setTimeout(detonate, 8000);   // it goes off on its own a few seconds in
 };
 
 function blocked(x, z) {
@@ -167,7 +206,13 @@ function loop() {
     f.mesh.children[0].scale.setScalar(1 + Math.sin(t * 4 + f.phase) * 0.25);
   }
   water.position.y = Math.sin(t * 0.8) * 0.05;
+  updateBlast(dt);
   camera.position.set(player.x, height(player.x, player.z) + 1.7, player.z);
+  if (shake > 0) {
+    shake -= dt;
+    camera.position.x += (Math.random() - 0.5) * shake * 0.6;
+    camera.position.y += (Math.random() - 0.5) * shake * 0.6;
+  }
   camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
