@@ -11,7 +11,7 @@ html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui;background:
 </style></head><body>
 <div id="hud">Fireflies: <b id="got">0</b>/10 · <span id="time">0.0</span>s</div>
 <div id="msg"><h1>FIREFLY ISLAND</h1><p>Catch all 10 fireflies hidden around the island.<br>
-WASD / arrows to walk · Shift to run · drag the mouse to look · N to detonate<br><br>Click to start</p></div>
+WASD / arrows to walk · Shift to run · drag the mouse to look · N nuke · M meteor<br><br>Click to start</p></div>
 <div id="flash" style="position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -19,7 +19,7 @@ const R = 55, TOTAL = 10;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9fd3ea);
 scene.fog = new THREE.Fog(0x9fd3ea, 20, 90);
-const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 500);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 900);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.prepend(renderer.domElement);
@@ -125,6 +125,7 @@ blast.add(fireball, stem, cap, skirt, wave);
 const flash = document.getElementById('flash');
 const capColor = [new THREE.Color(0xff8a3a), new THREE.Color(0x6e5c52)];
 let blastT = -1, shake = 0, waveHit = false;
+const fx = { glow: 0, dark: 0, nukeFlash: 0, rockFlash: 0 };  // shared sky/flash state
 
 function detonate() { blastT = 0; waveHit = false; blast.visible = true; }
 
@@ -132,8 +133,8 @@ function updateBlast(dt) {
   if (blastT < 0) return;
   const t = (blastT += dt), e = 1 - Math.pow(1 - Math.min(1, t / 8), 3);  // ease-out growth
   const h = 8 + e * 60, fade = Math.max(0, 1 - Math.max(0, t - 20) / 12);
-  flash.style.opacity = Math.max(0, 1 - t * 1.2);
-  scene.background.copy(SKY).lerp(GLOW, Math.max(0, 0.7 - t * 0.08));
+  fx.nukeFlash = Math.max(0, 1 - t * 1.2);
+  fx.glow = Math.max(0, 0.7 - t * 0.08);
   fireball.scale.setScalar(6 + e * 8); fireball.position.y = h;
   fireball.material.opacity = Math.max(0, 1 - t / 6);
   cap.scale.set(10 + e * 16, 7 + e * 9, 10 + e * 16); cap.position.y = h;
@@ -144,13 +145,61 @@ function updateBlast(dt) {
   const radius = t * 45;                       // shockwave spreading over the sea
   wave.scale.setScalar(radius); wave.material.opacity = Math.max(0, 1 - radius / 260);
   if (!waveHit && radius > Math.hypot(player.x, player.z + 160)) { waveHit = true; shake = 1.2; }
-  if (fade === 0) { blastT = -1; blast.visible = false; scene.background.copy(SKY); }
+  if (fade === 0) { blastT = -1; blast.visible = false; fx.glow = fx.nukeFlash = 0; }
+}
+
+// The Chicxulub impactor: a ~10 km rock (about Manhattan-sized) that ended the dinosaurs.
+// It streaks in over 4 s, hits the sea far to the east, and dust darkens the sky for a while.
+const IMPACT = new THREE.Vector3(260, 0, -140), FROM = new THREE.Vector3(-150, 420, -320);
+const DUST = new THREE.Color(0x4a3a36);
+const meteor = new THREE.Group(); meteor.visible = false; scene.add(meteor);
+const rockBody = new THREE.Mesh(new THREE.DodecahedronGeometry(12, 1), blastMat(0x3b2a22));
+const heat = new THREE.Mesh(new THREE.SphereGeometry(17, 16, 12), blastMat(0xffa040));
+heat.material.opacity = 0.5;
+const tailG = new THREE.ConeGeometry(16, 180, 16, 1, true); tailG.rotateX(Math.PI / 2); tailG.translate(0, 0, 90);
+const tail = new THREE.Mesh(tailG, blastMat(0xff7a2a)); tail.material.opacity = 0.55;
+meteor.add(rockBody, heat, tail);
+const crater = new THREE.Group(); crater.position.copy(IMPACT); crater.visible = false; scene.add(crater);
+const dome = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), blastMat(0xffffff));
+const plume = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 1, 1, 20, 1, true), blastMat(0x5a4a44));
+const quake = new THREE.Mesh(new THREE.RingGeometry(0.96, 1, 128), blastMat(0xffd0a0));
+quake.rotation.x = -Math.PI / 2; quake.position.y = 0.4;
+crater.add(dome, plume, quake);
+const domeColor = [new THREE.Color(0xffffff), new THREE.Color(0xff6a20), new THREE.Color(0x3a2e2a)];
+let rockT = -1, quakeHit = false;
+
+function launchMeteor() { rockT = 0; quakeHit = false; meteor.visible = true; crater.visible = false; }
+
+function updateMeteor(dt) {
+  if (rockT < 0) return;
+  const t = (rockT += dt), FALL = 4;
+  if (t < FALL) {                                 // falling: accelerate toward the sea
+    meteor.position.copy(FROM).lerp(IMPACT, (t / FALL) ** 2);
+    meteor.lookAt(FROM); rockBody.rotation.x += dt * 2;
+    fx.glow = Math.max(fx.glow, t / FALL * 0.3);
+    return;
+  }
+  const a = t - FALL, e = 1 - Math.pow(1 - Math.min(1, a / 12), 3);
+  meteor.visible = false; crater.visible = true;
+  if (blastT < 0) fx.glow = 0;                    // clear the fall's glow unless the nuke owns it
+  fx.rockFlash = Math.max(0, 1 - a * 0.6);
+  fx.dark = Math.min(0.85, a * 0.12) * Math.max(0, 1 - Math.max(0, a - 40) / 20);
+  dome.scale.set(20 + e * 140, 10 + e * 90, 20 + e * 140);
+  dome.material.color.copy(domeColor[0]).lerp(domeColor[1], Math.min(1, a / 2));
+  if (a > 2) dome.material.color.lerp(domeColor[2], Math.min(1, (a - 2) / 10));
+  plume.scale.set(15 + e * 25, 20 + e * 260, 15 + e * 25); plume.position.y = plume.scale.y / 2;
+  const radius = a * 70;                          // bigger, faster shockwave than the nuke
+  quake.scale.setScalar(radius); quake.material.opacity = Math.max(0, 1 - radius / 500);
+  if (!quakeHit && radius > Math.hypot(player.x - IMPACT.x, player.z - IMPACT.z)) { quakeHit = true; shake = 3; }
+  const fade = Math.max(0, 1 - Math.max(0, a - 35) / 25);
+  dome.material.opacity = plume.material.opacity = fade;
+  if (fade === 0) { rockT = -1; crater.visible = false; fx.dark = fx.rockFlash = 0; }
 }
 
 // Player state and controls
 const player = { x: 0, z: 0, yaw: 0, pitch: 0 };
 const keys = {};
-addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyN') detonate(); });
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyN') detonate(); if (e.code === 'KeyM') launchMeteor(); });
 addEventListener('keyup', e => keys[e.code] = false);
 let dragging = false, lastX = 0, lastY = 0;
 addEventListener('pointerdown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
@@ -169,6 +218,7 @@ msg.onclick = () => {
   got = 0; gotEl.textContent = 0; spawnFlies();
   startTime = performance.now(); playing = true; msg.style.display = 'none';
   setTimeout(detonate, 8000);   // it goes off on its own a few seconds in
+  setTimeout(launchMeteor, 30000);
 };
 
 function blocked(x, z) {
@@ -206,7 +256,11 @@ function loop() {
     f.mesh.children[0].scale.setScalar(1 + Math.sin(t * 4 + f.phase) * 0.25);
   }
   water.position.y = Math.sin(t * 0.8) * 0.05;
-  updateBlast(dt);
+  updateBlast(dt); updateMeteor(dt);
+  flash.style.opacity = Math.max(fx.nukeFlash, fx.rockFlash);
+  scene.background.copy(SKY).lerp(DUST, fx.dark).lerp(GLOW, fx.glow);
+  scene.fog.color.copy(scene.background);
+  sun.intensity = 0.8 * (1 - fx.dark * 0.8);
   camera.position.set(player.x, height(player.x, player.z) + 1.7, player.z);
   if (shake > 0) {
     shake -= dt;
